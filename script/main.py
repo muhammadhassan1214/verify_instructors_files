@@ -39,7 +39,7 @@ class VerifyInstructorsFiles:
 
     def initialize(self) -> bool:
         try:
-            headless = True
+            headless = False
             self.driver = get_undetected_driver(headless=headless)
             if self.driver:
                 logger.info(f"Chrome driver initialized successfully, mode: {'headless' if headless else 'headed'}")
