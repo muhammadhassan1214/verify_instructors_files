@@ -21,7 +21,8 @@ from .utils import (
 # Tesseract executable (after installing from https://github.com/UB-Mannheim/tesseract/wiki)
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 # Poppler 'bin' folder (after extracting from https://github.com/oschwartz10612/poppler-windows/releases)
-POPPLER_PATH = r"C:\Users\Admin\Downloads\Release-26.02.0-0\poppler-26.02.0\Library\bin"
+# POPPLER_PATH = r"C:\Users\Admin\Downloads\Release-26.02.0-0\poppler-26.02.0\Library\bin"
+POPPLER_PATH = r"C:\Users\Rachael Shell\Downloads\Release-26.02.0-0\poppler-26.02.0\Library\bin"
 # ----------------------------------------------------------------------
 
 ENABLE_OCR_FALLBACK = True
