@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from selenium.webdriver.common.by import By
+from mail_sender import email_generator, email_sender
 from Utils.utils import get_undetected_driver
 from Utils.functions import (
     login_to_enrollware_and_navigate_to_instructor_records,
@@ -39,7 +40,7 @@ class VerifyInstructorsFiles:
 
     def initialize(self) -> bool:
         try:
-            headless = False
+            headless = True
             self.driver = get_undetected_driver(headless=headless)
             if self.driver:
                 logger.info(f"Chrome driver initialized successfully, mode: {'headless' if headless else 'headed'}")
@@ -98,6 +99,7 @@ def main():
             if not all_files:
                 logger.info(f"No files found for instructor: {username}")
                 record = generate_record(email, username, "No File(s) Found", '')
+                email_sender.send_email(email_generator.generate_missing_documents_email(record))
                 append_to_csv(csv_log_path, record)
                 continue
 
@@ -106,8 +108,7 @@ def main():
             for file_link in all_files:
                 file_url = str(file_link.get_attribute("href") or "").strip()
                 file_name = str(file_link.text or "").strip() or os.path.basename(file_url.split("?")[0]) or "unknown_file"
-                normalized_name = file_name.lower()
-                local_path = os.path.join(downloads_dir, file_name)
+                local_path = os.path.join(downloads_dir, file_name.lower())
                 file_paths.append({"path": local_path, "name": file_name, "url": file_url})
 
             found_files = []
@@ -130,16 +131,20 @@ def main():
             for file in files_to_check:
                 if file["file_name"] not in found_files:
                     missing_files.append(file["file_name"])
+
             missing_files_name = ", ".join([f for f in missing_files])
             row = generate_record(email, username, "File(s) missing", missing_files_name)
             append_to_csv(csv_log_path, row)
+
+            if missing_files_name:
+                email_sender.send_email(email_generator.generate_missing_documents_email(row))
 
             # add url to done_urls.txt for avoiding re-processing
             with open(done_urls_path, "a", encoding="utf-8") as f:
                 f.write(url + "\n")
 
         processor.cleanup()
-        print("\nAll files processed and sent to enrollnationwide API.\n")
+        print("\nAll users have been processed\n")
 
 
     except Exception as e:

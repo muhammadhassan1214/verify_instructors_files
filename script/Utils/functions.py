@@ -2,10 +2,13 @@ import os
 import csv
 import time
 import shutil
-import logging
 import requests
+import re
 import mimetypes
+import logging
 
+from pdf2image import convert_from_path
+import pytesseract
 from pypdf import PdfReader
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
@@ -14,6 +17,14 @@ from .utils import (
     input_element, click_element_by_js, select_by_text,
     get_element_attribute
 )
+
+# Tesseract executable (after installing from https://github.com/UB-Mannheim/tesseract/wiki)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# Poppler 'bin' folder (after extracting from https://github.com/oschwartz10612/poppler-windows/releases)
+POPPLER_PATH = r"C:\Users\Admin\Downloads\Release-26.02.0-0\poppler-26.02.0\Library\bin"
+# ----------------------------------------------------------------------
+
+ENABLE_OCR_FALLBACK = True
 
 # Load environment variables and validate
 load_dotenv()
@@ -120,48 +131,84 @@ def get_element_value(driver, element_id: str) -> str:
         return ""
 
 
+def _normalize(text: str) -> str:
+    """Collapse all whitespace into single spaces and lowercase, so line
+    wraps / extra spacing / case differences don't break substring matches."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _extract_text_pypdf(file_path: str) -> str:
+    """Extract text using pypdf. Returns '' if nothing extractable."""
+    text = ""
+    reader = PdfReader(file_path)
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text.strip()
+
+
+def _extract_text_ocr(file_path: str) -> str:
+    """Fallback for scanned/image-based PDFs with no embedded text layer.
+    Rasterizes each page to an image and runs Tesseract OCR on it."""
+    text = ""
+    pages = convert_from_path(file_path, poppler_path=POPPLER_PATH)
+    for i, image in enumerate(pages, start=1):
+        page_text = pytesseract.image_to_string(image)
+        text += page_text + "\n"
+    return text.strip()
+
+
 def extract_pdf_text_and_check_for_the_text(file_path: str, files_to_check: list[dict]) -> tuple[bool, str]:
     """
-    Identifies the file type. If it is a PDF, parses and returns its text.
-    Otherwise, returns an empty string.
+    If file_path is a PDF, extracts its text (embedded text first, OCR as
+    fallback for scanned PDFs) and checks whether any entry in files_to_check
+    has its text_to_check (or alternative_text) present.
+
+    Returns (True, file_name) on the first match, else (False, '').
     """
-
-    # Guess the MIME type based on the file extension
     mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type != 'application/pdf':
+        return False, ''
 
-    # Check if the file is explicitly recognized as a PDF
-    if mime_type == 'application/pdf':
-        try:
-            extracted_text = ""
-            reader = PdfReader(file_path)
+    try:
+        full_text = _extract_text_pypdf(file_path)
+        used_ocr = False
 
-            # Iterate through all pages and extract text
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    extracted_text += page_text + "\n"
+        if not full_text and ENABLE_OCR_FALLBACK:
+            logger.info(f"No embedded text in {file_path}, running OCR...")
+            full_text = _extract_text_ocr(file_path)
+            used_ocr = True
 
-            full_text = extracted_text.strip()
-
-            for file in files_to_check:
-                text_to_check = str(file.get('text_to_check', '')).strip()
-                file_name = str(file.get('file_name', '')).strip()
-                alternative_text = str(file.get('alternative_text', '')).strip()
-
-                # Check primary text first
-                if text_to_check and text_to_check in full_text:
-                    return True, file_name
-
-                # If primary text is not found, fallback to alternative text when provided
-                if alternative_text and alternative_text in full_text:
-                    return True, file_name
-
-        except Exception as e:
-            print(f"Error reading the PDF file: {e}")
+        if not full_text:
+            logger.warning(
+                f"No extractable text in {file_path} even after "
+                f"{'OCR' if used_ocr else 'text extraction'}."
+            )
             return False, ''
 
-    # If it's a PNG, JPEG, or anything else, return an empty string
-    return False, ''
+        normalized_full_text = _normalize(full_text)
+
+        for file in files_to_check:
+            text_to_check = str(file.get('text_to_check', '')).strip()
+            file_name = str(file.get('file_name', '')).strip()
+            alternative_text = str(file.get('alternative_text', '')).strip()
+
+            if text_to_check and _normalize(text_to_check) in normalized_full_text:
+                return True, file_name
+            if alternative_text and _normalize(alternative_text) in normalized_full_text:
+                return True, file_name
+
+        logger.info(
+            f"No matching text found in {file_path} "
+            f"({'via OCR' if used_ocr else 'via embedded text'}). "
+            f"Extracted preview: {full_text[:300]!r}"
+        )
+        return False, ''
+
+    except Exception as e:
+        logger.error(f"Error reading PDF {file_path}: {e}")
+        return False, ''
 
 
 def delete_file(file_path: str, file_name: str):
