@@ -98,7 +98,8 @@ def main():
             all_files = processor.driver.find_elements(By.XPATH, "//a[@title= 'View']")
             if not all_files:
                 logger.info(f"No files found for instructor: {username}")
-                record = generate_record(email, username, "No File(s) Found", '')
+                missing_files_name = ", ".join([f["file_name"] for f in files_to_check])
+                record = generate_record(email, username, "No File(s) Found", missing_files_name)
                 email_sender.send_email(email_generator.generate_missing_documents_email(record))
                 append_to_csv(csv_log_path, record)
                 continue
