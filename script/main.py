@@ -1,5 +1,6 @@
 import os
 import sys
+import base64
 import logging
 from selenium.webdriver.common.by import By
 from mail_sender import email_generator, email_sender
@@ -76,6 +77,12 @@ def main():
             os.makedirs(downloads_dir, exist_ok=True)
         csv_log_path = os.path.join(downloads_dir, "instructors_skipped.csv")
 
+        ATTACHMENT_PATH = rf"{downloads_dir}\AHA Application Agreement and monitoring form.pdf"  # adjust path as needed
+        ATTACHMENT_NAME = "AHA Application Agreement and monitoring form.pdf"  # name shown to recipient
+
+        with open(ATTACHMENT_PATH, "rb") as f:
+            ATTACHMENT_B64 = base64.b64encode(f.read()).decode("utf-8")
+
         instructor_urls = processor.driver.find_elements(By.XPATH, "//td/a[contains(@href, 'user-edit')]")
         for instructor_url in instructor_urls:
             _url = instructor_url.get_attribute("href")
@@ -100,7 +107,8 @@ def main():
                 logger.info(f"No files found for instructor: {username}")
                 missing_files_name = ", ".join([f["file_name"] for f in files_to_check])
                 record = generate_record(email, username, "No File(s) Found", missing_files_name)
-                email_sender.send_email(email_generator.generate_missing_documents_email(record))
+                message = email_generator.generate_missing_documents_email(record)
+                email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
                 append_to_csv(csv_log_path, record)
                 continue
 
@@ -138,7 +146,8 @@ def main():
             append_to_csv(csv_log_path, row)
 
             if missing_files_name:
-                email_sender.send_email(email_generator.generate_missing_documents_email(row))
+                message = email_generator.generate_missing_documents_email(row)
+                email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
 
             # add url to done_urls.txt for avoiding re-processing
             with open(done_urls_path, "a", encoding="utf-8") as f:

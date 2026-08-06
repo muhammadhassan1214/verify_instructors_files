@@ -12,7 +12,7 @@ headers = {
 }
 
 
-def send_email(email_content: dict) -> bool:
+def send_email(email_content: dict, attachment_name: str, attachment_b64: str) -> bool:
     payload = {
           "sender": {
             "name": os.getenv("SENDER_NAME"),
@@ -25,7 +25,13 @@ def send_email(email_content: dict) -> bool:
             }
           ],
           "subject": email_content.get("subject"),
-          "htmlContent": email_content.get("html_body")
+          "htmlContent": email_content.get("html_body"),
+          "attachment": [
+                {
+                    "content": attachment_b64,
+                    "name": attachment_name
+                }
+            ]
         }
 
 
