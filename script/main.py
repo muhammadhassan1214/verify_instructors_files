@@ -66,22 +66,30 @@ def main():
     all_instructors_urls = []
     url = "https://www.enrollware.com/admin/tc-user-list.aspx"
     processor = VerifyInstructorsFiles()
+
+    # Resolve paths and load the email attachment BEFORE spinning up the
+    # browser/logging in, so a missing attachment fails fast instead of
+    # wasting a full login cycle.
+    downloads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads")
+    if not os.path.exists(downloads_dir):
+        os.makedirs(downloads_dir, exist_ok=True)
+    csv_log_path = os.path.join(downloads_dir, "instructors_skipped.csv")
+
+    ATTACHMENT_PATH = rf"{downloads_dir}\AHA Application Agreement and monitoring form.pdf"  # adjust path as needed
+    ATTACHMENT_NAME = "AHA Application Agreement and monitoring form.pdf"  # name shown to recipient
+
+    try:
+        with open(ATTACHMENT_PATH, "rb") as f:
+            ATTACHMENT_B64 = base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        logger.error(f"Could not load email attachment at {ATTACHMENT_PATH}: {e}")
+        return
+
     try:
         if not processor.initialize():
             return
         if not login_to_enrollware_and_navigate_to_instructor_records(processor.driver):
             return
-
-        downloads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads")
-        if not os.path.exists(downloads_dir):
-            os.makedirs(downloads_dir, exist_ok=True)
-        csv_log_path = os.path.join(downloads_dir, "instructors_skipped.csv")
-
-        ATTACHMENT_PATH = rf"{downloads_dir}\AHA Application Agreement and monitoring form.pdf"  # adjust path as needed
-        ATTACHMENT_NAME = "AHA Application Agreement and monitoring form.pdf"  # name shown to recipient
-
-        with open(ATTACHMENT_PATH, "rb") as f:
-            ATTACHMENT_B64 = base64.b64encode(f.read()).decode("utf-8")
 
         instructor_urls = processor.driver.find_elements(By.XPATH, "//td/a[contains(@href, 'user-edit')]")
         for instructor_url in instructor_urls:
@@ -107,8 +115,8 @@ def main():
                 logger.info(f"No files found for instructor: {username}")
                 missing_files_name = ", ".join([f["file_name"] for f in files_to_check])
                 record = generate_record(email, username, "No File(s) Found", missing_files_name)
-                message = email_generator.generate_missing_documents_email(record)
-                email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
+                # message = email_generator.generate_missing_documents_email(record)
+                # email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
                 append_to_csv(csv_log_path, record)
                 continue
 
@@ -120,34 +128,48 @@ def main():
                 local_path = os.path.join(downloads_dir, file_name.lower())
                 file_paths.append({"path": local_path, "name": file_name, "url": file_url})
 
-            found_files = []
-            pdf_exist = False
+            found_files = set()
             for file_info in file_paths:
+                if len(found_files) >= len(files_to_check):
+                    logger.info(
+                        f"All required document types already found for {username}; "
+                        f"skipping remaining files"
+                    )
+                    break
+
                 file_path = file_info["path"]
+
                 if os.path.exists(file_path):
-                    logger.info(f"File already exists locally, skipping download: {file_info['name']}")
-                    continue
+                    # Leftover from a prior interrupted run - don't re-download,
+                    # but still check it; skipping it outright would mean any
+                    # match inside it is silently lost.
+                    logger.info(f"File already exists locally, checking without re-downloading: {file_info['name']}")
+                else:
+                    download_file(file_info["url"], file_path, file_info["name"])
+                    if not os.path.exists(file_path):
+                        logger.warning(f"Download failed, skipping check for: {file_info['name']}")
+                        continue
 
-                download_file(file_info["url"], file_path, file_info["name"])
-
-                pdf_exist, file_name = extract_pdf_text_and_check_for_the_text(file_path, files_to_check)
-                if pdf_exist:
-                    found_files.append(file_name)
+                matched_file_names = extract_pdf_text_and_check_for_the_text(
+                    file_path, files_to_check, found_files
+                )
+                if matched_file_names:
+                    found_files.update(matched_file_names)
 
                 delete_file(file_path, file_info['name'])
 
-            missing_files = []
-            for file in files_to_check:
-                if file["file_name"] not in found_files:
-                    missing_files.append(file["file_name"])
+            missing_files = [
+                file["file_name"] for file in files_to_check
+                if file["file_name"] not in found_files
+            ]
 
-            missing_files_name = ", ".join([f for f in missing_files])
+            missing_files_name = ", ".join(missing_files)
             row = generate_record(email, username, "File(s) missing", missing_files_name)
             append_to_csv(csv_log_path, row)
 
-            if missing_files_name:
-                message = email_generator.generate_missing_documents_email(row)
-                email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
+            # if missing_files_name:
+                # message = email_generator.generate_missing_documents_email(row)
+                # email_sender.send_email(message, ATTACHMENT_NAME, ATTACHMENT_B64)
 
             # add url to done_urls.txt for avoiding re-processing
             with open(done_urls_path, "a", encoding="utf-8") as f:

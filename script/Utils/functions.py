@@ -160,17 +160,42 @@ def _extract_text_ocr(file_path: str) -> str:
     return text.strip()
 
 
-def extract_pdf_text_and_check_for_the_text(file_path: str, files_to_check: list[dict]) -> tuple[bool, str]:
+def extract_pdf_text_and_check_for_the_text(
+    file_path: str,
+    files_to_check: list[dict],
+    already_found: set | None = None,
+) -> list[str]:
     """
     If file_path is a PDF, extracts its text (embedded text first, OCR as
-    fallback for scanned PDFs) and checks whether any entry in files_to_check
-    has its text_to_check (or alternative_text) present.
+    fallback for scanned PDFs) and checks which of the NOT-YET-FOUND entries
+    in files_to_check are present.
 
-    Returns (True, file_name) on the first match, else (False, '').
+    A single PDF can contain multiple merged documents (e.g. a scan that
+    combines the Instructor Candidate Application and the BLS E-Card into
+    one file), so this returns ALL matching entries found in the file, not
+    just the first.
+
+    `already_found` is the set of file_names already confirmed for this
+    instructor from earlier files - those entries are skipped entirely
+    (no need to re-check for something we've already confirmed), which also
+    prevents duplicate matches being reported.
+
+    Returns a list of matched file_names. Empty list if the file is not a
+    PDF, has no extractable text, or matches nothing.
     """
+    already_found = already_found or set()
+
+    remaining_checks = [
+        f for f in files_to_check
+        if str(f.get('file_name', '')).strip() not in already_found
+    ]
+    if not remaining_checks:
+        # Everything this file could possibly confirm is already found.
+        return []
+
     mime_type, _ = mimetypes.guess_type(file_path)
     if mime_type != 'application/pdf':
-        return False, ''
+        return []
 
     try:
         full_text = _extract_text_pypdf(file_path)
@@ -186,30 +211,40 @@ def extract_pdf_text_and_check_for_the_text(file_path: str, files_to_check: list
                 f"No extractable text in {file_path} even after "
                 f"{'OCR' if used_ocr else 'text extraction'}."
             )
-            return False, ''
+            return []
 
         normalized_full_text = _normalize(full_text)
 
-        for file in files_to_check:
+        matched_file_names = []
+        for file in remaining_checks:
             text_to_check = str(file.get('text_to_check', '')).strip()
             file_name = str(file.get('file_name', '')).strip()
             alternative_text = str(file.get('alternative_text', '')).strip()
 
-            if text_to_check and _normalize(text_to_check) in normalized_full_text:
-                return True, file_name
-            if alternative_text and _normalize(alternative_text) in normalized_full_text:
-                return True, file_name
+            is_match = (
+                (text_to_check and _normalize(text_to_check) in normalized_full_text)
+                or (alternative_text and _normalize(alternative_text) in normalized_full_text)
+            )
+            if is_match:
+                matched_file_names.append(file_name)
 
-        logger.info(
-            f"No matching text found in {file_path} "
-            f"({'via OCR' if used_ocr else 'via embedded text'}). "
-            f"Extracted preview: {full_text[:300]!r}"
-        )
-        return False, ''
+        if matched_file_names:
+            logger.info(
+                f"Matched {matched_file_names} in {file_path} "
+                f"({'via OCR' if used_ocr else 'via embedded text'})"
+            )
+        else:
+            logger.info(
+                f"No matching text found in {file_path} "
+                f"({'via OCR' if used_ocr else 'via embedded text'}). "
+                f"Extracted preview: {full_text[:300]!r}"
+            )
+
+        return matched_file_names
 
     except Exception as e:
         logger.error(f"Error reading PDF {file_path}: {e}")
-        return False, ''
+        return []
 
 
 def delete_file(file_path: str, file_name: str):
